@@ -1,63 +1,39 @@
+const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 
-const { Collection } = require('discord.js');
+module.exports = {
+    data: new SlashCommandBuilder()
+        .setName('invites')
+        .setDescription('Check total invites for a user')
+        .addUserOption((option) =>
+            option
+                .setName('user')
+                .setDescription('The user whose invites you want to check')
+                .setRequired(false)
+        ),
 
-// Map to cache server invites: guildId -> Collection(inviteCode, uses)
-const guildInvites = new Collection();
+    async execute(interaction) {
+        const targetUser = interaction.options.getUser('user') || interaction.user;
 
-module.exports = (client) => {
-    // 1. Cache current invites when the bot logs in
-    client.on('ready', async () => {
-        for (const [guildId, guild] of client.guilds.cache) {
-            try {
-                const invites = await guild.invites.fetch();
-                const codeUses = new Collection();
-                invites.forEach((inv) => codeUses.set(inv.code, inv.uses));
-                guildInvites.set(guild.id, codeUses);
-            } catch (err) {
-                console.log(`Could not fetch invites for guild ${guild.name}:`, err.message);
-            }
-        }
-        console.log('Invite Tracker cache ready!');
-    });
-
-    // 2. Track new members joining
-    client.on('guildMemberAdd', async (member) => {
-        const cachedInvites = guildInvites.get(member.guild.id);
-        
         try {
-            const newInvites = await member.guild.invites.fetch();
+            const invites = await interaction.guild.invites.fetch();
             
-            // Find which invite increased in uses
-            const usedInvite = newInvites.find((inv) => cachedInvites?.get(inv.code) < inv.uses);
-            
-            // Update cache
-            const codeUses = new Collection();
-            newInvites.forEach((inv) => codeUses.set(inv.code, inv.uses));
-            guildInvites.set(member.guild.id, codeUses);
+            // Filter invites created by the target user and sum the uses
+            const userInvites = invites.filter((inv) => inv.inviter && inv.inviter.id === targetUser.id);
+            const totalUses = userInvites.reduce((acc, inv) => acc + inv.uses, 0);
 
-            // Optional: Send invite message in a system channel
-            const logChannel = member.guild.systemChannel; 
-            if (usedInvite && logChannel) {
-                const inviter = usedInvite.inviter;
-                logChannel.send(
-                    `Welcome ${member.user}! Joined using code **${usedInvite.code}** created by **${inviter ? inviter.tag : 'Unknown'}** (${usedInvite.uses} uses).`
-                );
-            }
+            const embed = new EmbedBuilder()
+                .setTitle(`📊 Invite Stats for ${targetUser.username}`)
+                .setColor('#5865F2')
+                .setDescription(`**${targetUser.username}** currently has **${totalUses}** invite(s).`)
+                .setThumbnail(targetUser.displayAvatarURL());
+
+            await interaction.reply({ embeds: [embed] });
         } catch (err) {
-            console.error('Error tracking invite:', err);
+            console.error(err);
+            await interaction.reply({
+                content: 'Failed to fetch invite stats. Make sure I have the `Manage Guild` permission!',
+                ephemeral: true
+            });
         }
-    });
-
-    // 3. Update cache when new invites are created
-    client.on('inviteCreate', async (invite) => {
-        const cached = guildInvites.get(invite.guild.id) || new Collection();
-        cached.set(invite.code, invite.uses);
-        guildInvites.set(invite.guild.id, cached);
-    });
-
-    // 4. Update cache when invites are deleted
-    client.on('inviteDelete', async (invite) => {
-        const cached = guildInvites.get(invite.guild.id);
-        if (cached) cached.delete(invite.code);
-    });
+    }
 };
